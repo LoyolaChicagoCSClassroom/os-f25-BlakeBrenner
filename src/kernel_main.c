@@ -133,7 +133,7 @@ void main() {
 
         if(status & 1){
             uint8_t scancode = inb(0x60);
-            esp_printf(putc, "%c", keyboard_map[scancode]);
+            esp_printf(putc,  "0x%02x %c\n", scancode, keyboard_map[scancode]);
         }
     } // Prevent CPU from running into invalid instructions
 }
