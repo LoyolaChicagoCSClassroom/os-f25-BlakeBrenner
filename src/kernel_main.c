@@ -142,6 +142,7 @@ void main() {
             } else {
                 // Key release codes (>= 128)
                 esp_printf(putc, "0x%02x (release)\n", scancode);
-        }
-    } // Prevent CPU from running into invalid instructions
+            }
+        } // Prevent CPU from running into invalid instructions
+    }
 }
