@@ -139,10 +139,7 @@ void main() {
             // Only process valid scancodes (< 128 = key press)
             if (scancode < 128) {
                 esp_printf(putc, "0x%02x %c\n", scancode, keyboard_map[scancode]);
-            } else {
-                // Key release codes (>= 128)
-                esp_printf(putc, "0x%02x (release)\n", scancode);
-            }
+            } //Ignore key releases for now
         } // Prevent CPU from running into invalid instructions
     }
 }
