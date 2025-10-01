@@ -129,11 +129,19 @@ void main() {
 
 
     while (1){
+         // Read keyboard controller status port (0x64)
         uint8_t status = inb(0x64);
 
-        if(status & 1){
-            uint8_t scancode = inb(0x60);
-            esp_printf(putc,  "0x%02x %c\n", scancode, keyboard_map[scancode]);
+        // If output buffer is full (bit 0 = 1), read scancode
+        if (status & 1) {
+            uint8_t scancode = inb(0x60);   // Get scancode from port 0x60
+
+            // Only process valid scancodes (< 128 = key press)
+            if (scancode < 128) {
+                rprintf(putc, "0x%02x %c\n", scancode, keyboard_map[scancode]);
+            } else {
+                // Key release codes (>= 128)
+                rprintf(putc, "0x%02x (release)\n", scancode);
         }
     } // Prevent CPU from running into invalid instructions
 }
