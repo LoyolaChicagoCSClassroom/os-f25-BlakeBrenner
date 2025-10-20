@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include "rprintf.h"
+#include "page.h"
 
 #define MULTIBOOT2_HEADER_MAGIC 0xe85250d6
 
@@ -122,10 +123,39 @@ int putc(int ch) {
             s++;
         }
     }
+//test page.c and page.h
+void test_page_allocator(void) {
+    esp_printf(putc, "=== PAGE FRAME ALLOCATOR TEST ===\n");
+
+    init_pfa_list();
+    esp_printf(putc, "Initial free pages: %u\n", pfa_free_count());
+
+    struct ppage *block = allocate_physical_pages(4);
+    if (!block) {
+        esp_printf(putc, "Allocation failed!\n");
+        return;
+    }
+
+    esp_printf(putc, "Free pages after alloc(4): %u\n", pfa_free_count());
+
+    struct ppage *cur = block;
+    int i = 0;
+    while (cur) {
+        esp_printf(putc, "Page %d at address %p\n", i++, cur->physical_addr);
+        cur = cur->next;
+    }
+
+    free_physical_pages(block);
+    esp_printf(putc, "Free pages after free: %u\n", pfa_free_count());
+    esp_printf(putc, "Allocator test complete.\n\n");
+}
+
 // Kernel entry point
 void main() {
     esp_printf(putc, "Hello, World!\n");
     esp_printf(putc, "Execution level: %d\n", 0);
+
+    test_page_allocator();
 
 
     while (1){
