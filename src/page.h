@@ -15,7 +15,7 @@ struct ppage {
 };
 
 // Global head of the free list (defined in page.c)
-extern struct ppage *free_physical_pages;
+extern struct ppage *free_list_head;
 
 // Initializes the allocator and builds the free list
 void init_pfa_list(void);
