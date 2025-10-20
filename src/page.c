@@ -1,77 +1,83 @@
 #include "page.h"
 
-// Statically allocated descriptor array for 128 pages (covers 256 MiB)
+// Static array of 128 page descriptors (2 MiB each = 256 MiB total)
 static struct ppage physical_page_array[128];
 
-// Head of free physical pages (doubly-linked list)
+// Head of the free physical pages list
 struct ppage *free_physical_pages = NULL;
 
-/* ---------- internal list helpers ---------- */
+/* ---------- internal helper functions ---------- */
 
+// Push a node to the front of a doubly linked list
 static void list_push_front(struct ppage **head, struct ppage *node) {
     node->prev = NULL;
     node->next = *head;
-    if (*head) (*head)->prev = node;
+    if (*head)
+        (*head)->prev = node;
     *head = node;
 }
 
+// Pop a node from the front of a list
 static struct ppage *list_pop_front(struct ppage **head) {
-    if (!*head) return NULL;
+    if (!*head)
+        return NULL;
     struct ppage *n = *head;
     *head = n->next;
-    if (*head) (*head)->prev = NULL;
+    if (*head)
+        (*head)->prev = NULL;
     n->next = n->prev = NULL;
     return n;
 }
 
+// Return the tail of a list
 static struct ppage *list_tail(struct ppage *head) {
-    if (!head) return NULL;
-    while (head->next) head = head->next;
+    if (!head)
+        return NULL;
+    while (head->next)
+        head = head->next;
     return head;
 }
 
+// Count list nodes
 static unsigned int list_length(struct ppage *head) {
     unsigned int n = 0;
-    while (head) { ++n; head = head->next; }
+    while (head) {
+        ++n;
+        head = head->next;
+    }
     return n;
 }
 
 /* ---------- public API ---------- */
 
+// Initialize free list of pages
 void init_pfa_list(void) {
-    // Start with an empty free list
     free_physical_pages = NULL;
 
-    // Initialize each descriptor and push to free list
-    // Assign physical addresses 0, 2MiB, 4MiB, ...
-    for (unsigned i = 0; i < (unsigned)(sizeof(physical_page_array)/sizeof(physical_page_array[0])); ++i) {
+    for (unsigned int i = 0; i < (sizeof(physical_page_array) / sizeof(physical_page_array[0])); ++i) {
         struct ppage *pp = &physical_page_array[i];
         pp->next = pp->prev = NULL;
-
-        // If your kernel knows the true base of available RAM, replace 0 with that base.
         pp->physical_addr = (void *)(uintptr_t)(i * (uintptr_t)PFA_PAGE_BYTES);
-
         list_push_front(&free_physical_pages, pp);
     }
 }
 
+// Allocate npages pages, or return NULL if not enough
 struct ppage *allocate_physical_pages(unsigned int npages) {
-    if (npages == 0) return NULL;
+    if (npages == 0)
+        return NULL;
 
-    // All-or-nothing: if we can’t get npages, roll back and return NULL.
     struct ppage *alloc_head = NULL;
     struct ppage *alloc_tail = NULL;
 
     for (unsigned int i = 0; i < npages; ++i) {
         struct ppage *got = list_pop_front(&free_physical_pages);
         if (!got) {
-            // Roll back anything we already took
-            if (alloc_head) {
+            // Roll back
+            if (alloc_head)
                 free_physical_pages(alloc_head);
-            }
             return NULL;
         }
-        // Append to the end of the allocated list
         if (!alloc_head) {
             alloc_head = alloc_tail = got;
         } else {
@@ -80,29 +86,25 @@ struct ppage *allocate_physical_pages(unsigned int npages) {
             alloc_tail = got;
         }
     }
-
     return alloc_head;
 }
 
+// Free a linked list of pages back to the free list
 void free_physical_pages(struct ppage *ppage_list) {
-    if (!ppage_list) return;
+    if (!ppage_list)
+        return;
 
-    // Splice returned list at the front of the free list (O(length(list)) to find tail)
     struct ppage *tail = list_tail(ppage_list);
 
-    // Link old head after tail
     tail->next = free_physical_pages;
-    if (free_physical_pages) {
+    if (free_physical_pages)
         free_physical_pages->prev = tail;
-    }
 
-    // New head is the returned list's head
     ppage_list->prev = NULL;
     free_physical_pages = ppage_list;
 }
 
-/* ---------- optional: lightweight diagnostics ---------- */
-
+// Return count of free pages (for debugging/testing)
 unsigned int pfa_free_count(void) {
     return list_length(free_physical_pages);
 }
