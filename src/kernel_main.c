@@ -141,8 +141,10 @@ void test_page_allocator(void) {
     struct ppage *cur = block;
     int i = 0;
     while (cur) {
-        esp_printf(putc, "Page %d at address %p\n", i++, cur->physical_addr);
+        esp_printf(putc, "Page %d addr: 0x%x\n", i++, (uint32_t)cur->physical_addr);
         cur = cur->next;
+    }
+
     }
 
     free_physical_pages(block);
