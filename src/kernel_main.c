@@ -123,13 +123,15 @@ int putc(int ch) {
             s++;
         }
     }
-//test page.c and page.h
-void test_page_allocator(void) {
-    esp_printf(putc, "=== PAGE FRAME ALLOCATOR TEST ===\n");
 
+void test_page_allocator(void) {
+    esp_printf(putc, "\n=== PAGE FRAME ALLOCATOR TEST ===\n");
+
+    // Initialize allocator
     init_pfa_list();
     esp_printf(putc, "Initial free pages: %u\n", pfa_free_count());
 
+    // Allocate 4 pages
     struct ppage *block = allocate_physical_pages(4);
     if (!block) {
         esp_printf(putc, "Allocation failed!\n");
@@ -138,19 +140,24 @@ void test_page_allocator(void) {
 
     esp_printf(putc, "Free pages after alloc(4): %u\n", pfa_free_count());
 
+    // Display allocated pages and their addresses
     struct ppage *cur = block;
     int i = 0;
     while (cur) {
-        esp_printf(putc, "Page %d addr: 0x%x\n", i++, (uint32_t)cur->physical_addr);
+        esp_printf(putc, "Page %d addr: 0x%08x\n", i++, (uint32_t)cur->physical_addr);
         cur = cur->next;
     }
 
-    }
-
+    // Free the pages back
     free_physical_pages(block);
     esp_printf(putc, "Free pages after free: %u\n", pfa_free_count());
-    esp_printf(putc, "Allocator test complete.\n\n");
+
+    // Print final summary
+    esp_printf(putc, "Allocator test complete.\n");
+    esp_printf(putc, "Total managed memory: %u MiB\n",
+                (unsigned int)((128 * (PFA_PAGE_BYTES >> 20)))); // 128 * 2 MiB = 256
 }
+
 
 // Kernel entry point
 void main() {
