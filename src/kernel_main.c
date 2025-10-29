@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include "rprintf.h"
 #include "page.h"
+#include "paging.h"
 
 #define MULTIBOOT2_HEADER_MAGIC 0xe85250d6
 
