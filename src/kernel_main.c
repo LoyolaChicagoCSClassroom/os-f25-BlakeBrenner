@@ -165,6 +165,28 @@ void main() {
     esp_printf(putc, "Hello, World!\n");
     esp_printf(putc, "Execution level: %d\n", 0);
 
+    // --- Paging bootstrap ---
+    // Clear PD (already zeroed via .bss, but explicit map will overwrite as needed)
+
+    // Identity-map kernel [0x0010_0000, &_end_kernel)
+    identity_map_range(0x00100000u, (uint32_t)&_end_kernel, kernel_pd);
+
+    // Identity-map current stack page(s)
+    uint32_t esp;
+    asm volatile("mov %%esp,%0" : "=r"(esp));
+    uint32_t stack_low  = (esp & ~(PAGE_SIZE - 1u)) - (7 * PAGE_SIZE); // map 8 pages
+    uint32_t stack_high = (esp & ~(PAGE_SIZE - 1u)) + (1 * PAGE_SIZE);
+    identity_map_range(stack_low, stack_high, kernel_pd);
+
+    // Identity-map VGA text buffer @ 0xB8000
+    identity_map_range(0x000B8000u, 0x000B8000u + PAGE_SIZE, kernel_pd);
+
+    // Load CR3 and enable paging
+    load_page_directory(kernel_pd);
+    enable_paging();
+    esp_printf(putc, "Paging enabled. PD=%p\n", kernel_pd);
+    // --- end paging bootstrap ---
+
     test_page_allocator();
 
 
