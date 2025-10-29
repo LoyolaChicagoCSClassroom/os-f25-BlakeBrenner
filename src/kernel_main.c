@@ -169,28 +169,6 @@ void main() {
 
     test_page_allocator();
 
-    //paging test
-    // Identity-map kernel: [0x0010_0000, &_end_kernel)
-    identity_map_range(0x00100000u, (uint32_t)&_end_kernel, kernel_pd);
-
-    // Identity-map current stack window (8 pages around ESP)
-    uint32_t esp;
-    __asm__ __volatile__("mov %%esp, %0" : "=r"(esp));
-    uint32_t stack_low  = (esp & ~(PAGE_SIZE - 1u)) - (7 * PAGE_SIZE);
-    uint32_t stack_high = (esp & ~(PAGE_SIZE - 1u)) + (1 * PAGE_SIZE);
-    identity_map_range(stack_low, stack_high, kernel_pd);
-
-    // Identity-map VGA text buffer @ 0xB8000
-    identity_map_range(0x000B8000u, 0x000B8000u + PAGE_SIZE, kernel_pd);
-
-    // Load CR3 and enable paging (CR0.PE | CR0.PG)
-    load_page_directory(kernel_pd);
-    enable_paging();
-
-    esp_printf(putc, "Paging enabled. PD=%p (kernel=%p..%p, stack ~%p, vga=0xB8000)\n",
-               kernel_pd, (void*)0x00100000u, &_end_kernel, (void*)esp);
-    // --- end paging test ---
-
     while (1){
          // Read keyboard controller status port (0x64)
         uint8_t status = inb(0x64);
