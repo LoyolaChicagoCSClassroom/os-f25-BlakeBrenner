@@ -1,87 +1,167 @@
 #include "paging.h"
 
-/* ===== single page directory + single page table (covers 0..4MiB VA) ===== */
+/* ===== Global paging structures (must be global + 4096-aligned) ===== */
 struct page_directory_entry kernel_pd[PD_ENTRIES] __attribute__((aligned(4096)));
-struct page                 kernel_pt0[PT_ENTRIES] __attribute__((aligned(4096)));
+struct page kernel_pt_pool[PT_POOL_COUNT][PT_ENTRIES] __attribute__((aligned(4096)));
+static uint32_t kernel_pt_count = 0;
 
-/* tiny helpers */
-static inline uint32_t align_down(uint32_t x) { return x & ~0xFFFu; }
-static inline uint32_t vaddr_pdi(uint32_t v)  { return (v >> 22) & 0x3FFu; }
-static inline uint32_t vaddr_pti(uint32_t v)  { return (v >> 12) & 0x3FFu; }
+/* ===== Helpers ===== */
+static inline uint32_t align_down(uint32_t x, uint32_t a) { return x & ~(a - 1u); }
+static inline uint32_t vaddr_pdi(uint32_t v) { return (v >> 22) & 0x3FFu; }
+static inline uint32_t vaddr_pti(uint32_t v) { return (v >> 12) & 0x3FFu; }
 
-/* Ensure PDE[0] points to our single page table (4 KiB pages). */
-static void ensure_pde0(void) {
-    if (!kernel_pd[0].present) {
-        // zero-init PT
-        for (uint32_t i = 0; i < PT_ENTRIES; ++i) {
-            kernel_pt0[i].present  = 0;
-            kernel_pt0[i].rw       = 0;
-            kernel_pt0[i].user     = 0;
-            kernel_pt0[i].accessed = 0;
-            kernel_pt0[i].dirty    = 0;
-            kernel_pt0[i].unused   = 0;
-            kernel_pt0[i].frame    = 0;
-        }
-        // point PDE[0] to PT0 (identity assumption during bring-up)
-        kernel_pd[0].present       = 1;
-        kernel_pd[0].rw            = 1;
-        kernel_pd[0].user          = 0;
-        kernel_pd[0].writethru     = 0;
-        kernel_pd[0].cachedisabled = 0;
-        kernel_pd[0].accessed      = 0;
-        kernel_pd[0].pagesize      = 0;                 // 4 KiB pages
-        kernel_pd[0].ignored       = 0;
-        kernel_pd[0].os_specific   = 0;
-        kernel_pd[0].frame         = ((uint32_t)(uintptr_t)kernel_pt0) >> 12;
-    }
+static void bzero_bytes(void *dst, uint32_t bytes) {
+    uint32_t *p = (uint32_t*)dst;
+    for (uint32_t n = bytes >> 2; n; --n) { *p++ = 0; }
+    uint8_t *q = (uint8_t*)p;
+    for (uint32_t i = 0; i < (bytes & 3u); ++i) q[i] = 0;
 }
 
-/* Map a list of physical pages at starting virtual address (FIRST 4MiB ONLY). */
-void *map_pages(void *vaddr, struct ppage *pglist, struct page_directory_entry *pd) {
-    (void)pd; // we only support kernel_pd in this minimal version
-    ensure_pde0();
+static inline void invlpg(void *addr) {
+    __asm__ __volatile__("invlpg (%0)" :: "r"(addr) : "memory");
+}
 
-    uint32_t va = align_down((uint32_t)(uintptr_t)vaddr);
+/* Create (& zero) a new page table from the static pool; return NULL if pool exhausted. */
+static struct page* alloc_pt_from_pool(void) {
+    if (kernel_pt_count >= PT_POOL_COUNT) return 0;
+    struct page *pt = &kernel_pt_pool[kernel_pt_count++][0];
+    bzero_bytes(pt, sizeof(kernel_pt_pool[0]));
+    return pt;
+}
+
+/* Ensure a PT exists for the given PDE index.
+   If absent, allocate one from the pool and wire the PDE for 4KiB pages. */
+static struct page* ensure_pt(struct page_directory_entry *pd, uint32_t pdi) {
+    if (pd[pdi].present) {
+        uint32_t pt_phys = pd[pdi].frame << 12;
+        return (struct page*)pt_phys;  // prior to paging, identity assumption is fine
+    }
+    struct page *pt = alloc_pt_from_pool();
+    if (!pt) return 0;
+
+    pd[pdi].present       = 1;
+    pd[pdi].rw            = 1;
+    pd[pdi].user          = 0;
+    pd[pdi].writethru     = 0;
+    pd[pdi].cachedisabled = 0;
+    pd[pdi].accessed      = 0;
+    pd[pdi].pagesize      = 0;                 // 4 KiB pages
+    pd[pdi].ignored       = 0;
+    pd[pdi].os_specific   = 0;
+    pd[pdi].frame         = ((uint32_t)(uintptr_t)pt) >> 12; // physical >> 12
+
+    return pt;
+}
+
+/* Map a single 4 KiB page: VA -> PA (helper for map_pages) */
+static void map_4k(struct page_directory_entry *pd, uint32_t va, uint32_t pa) {
+    uint32_t pdi = vaddr_pdi(va);
+    uint32_t pti = vaddr_pti(va);
+
+    struct page *pt = ensure_pt(pd, pdi);
+    if (!pt) return; // out of PTs, silently drop
+
+    pt[pti].present  = 1;
+    pt[pti].rw       = 1;
+    pt[pti].user     = 0;
+    pt[pti].accessed = 0;
+    pt[pti].dirty    = 0;
+    pt[pti].unused   = 0;
+    pt[pti].frame    = (pa >> 12);
+}
+
+/* ===== Assignment function: map a linked list of physical pages at vaddr ===== */
+void *map_pages(void *vaddr, struct ppage *pglist, struct page_directory_entry *pd) {
+    uint32_t va = align_down((uint32_t)(uintptr_t)vaddr, PAGE_SIZE);
 
     for (struct ppage *cur = pglist; cur; cur = cur->next) {
         uint32_t pa_base = (uint32_t)(uintptr_t)cur->physical_addr;
-
-        // Only support addresses in PDE index 0 (0x00000000..0x003FFFFF)
-        if (vaddr_pdi(va) != 0) {
-            // silently stop (or you could assert / print if you have logging)
-            break;
-        }
-
-        // If your allocator returns >4KiB (e.g., 2MiB), expand to 4KiB PTEs:
         for (uint32_t off = 0; off < PFA_PAGE_BYTES; off += PAGE_SIZE) {
-            if (vaddr_pdi(va) != 0) break;     // don't cross out of PT0
-            uint32_t pti = vaddr_pti(va);
-
-            kernel_pt0[pti].present  = 1;
-            kernel_pt0[pti].rw       = 1;
-            kernel_pt0[pti].user     = 0;
-            kernel_pt0[pti].accessed = 0;
-            kernel_pt0[pti].dirty    = 0;
-            kernel_pt0[pti].unused   = 0;
-            kernel_pt0[pti].frame    = (pa_base + off) >> 12;
-
+            map_4k(pd, va, pa_base + off);
             va += PAGE_SIZE;
         }
     }
-    return (void*)align_down((uint32_t)(uintptr_t)vaddr);
+    return (void*)align_down((uint32_t)(uintptr_t)vaddr, PAGE_SIZE);
 }
 
-/* CR3 := PD base (must be phys & 4 KiB aligned). */
+/* ===== Control registers ===== */
 void loadPageDirectory(struct page_directory_entry *pd) {
     __asm__ __volatile__("mov %0, %%cr3" :: "r"(pd) : "memory");
 }
-
-/* Enable protected mode + paging: set CR0.PE|PG */
 void enablePaging(void) {
     __asm__ __volatile__(
         "mov %%cr0, %%eax\n"
-        "or  $0x80000001, %%eax\n"
+        "or  $0x80000001, %%eax\n"  /* CR0.PE | CR0.PG */
         "mov %%eax, %%cr0\n"
         ::: "eax", "memory"
     );
+}
+
+/* ===== Recursive paging: set PDE[1023] to point to PD itself ===== */
+void paging_init_recursive(struct page_directory_entry *pd) {
+    pd[1023].present       = 1;
+    pd[1023].rw            = 1;
+    pd[1023].user          = 0;
+    pd[1023].writethru     = 0;
+    pd[1023].cachedisabled = 0;
+    pd[1023].accessed      = 0;
+    pd[1023].pagesize      = 0; // 4 KiB pages
+    pd[1023].ignored       = 0;
+    pd[1023].os_specific   = 0;
+    pd[1023].frame         = ((uint32_t)(uintptr_t)pd) >> 12; // PD maps itself
+}
+
+/* ===== Functions that use the recursive mapping =====
+   Requires: paging enabled AND paging_init_recursive() called before CR3 load. */
+
+static inline int is_present(uint32_t entry) { return entry & 0x001; }
+
+/* Translate VA -> PA; returns NULL if PDE/PTE not present. */
+void *get_physaddr(void *virtualaddr) {
+    unsigned long va = (unsigned long)virtualaddr;
+    unsigned long pdindex = va >> 22;
+    unsigned long ptindex = (va >> 12) & 0x03FF;
+
+    volatile unsigned long *pd = (unsigned long *)0xFFFFF000; // PD via recursive map
+    if (!is_present(pd[pdindex])) return (void*)0;
+
+    volatile unsigned long *pt = (unsigned long *)0xFFC00000 + (0x400 * pdindex);
+    if (!is_present(pt[ptindex])) return (void*)0;
+
+    unsigned long frame = pt[ptindex] & ~0xFFFUL;
+    unsigned long off   = va & 0xFFFUL;
+    return (void *)(frame + off);
+}
+
+/* Map exactly one 4 KiB page: physaddr -> virtualaddr with low 12-bit flags.
+   If the PT is missing, allocate from the static pool and wire the PDE. */
+int map_page(void *physaddr, void *virtualaddr, unsigned int flags) {
+    unsigned long pa = (unsigned long)physaddr;
+    unsigned long va = (unsigned long)virtualaddr;
+
+    if ((pa & 0xFFFUL) || (va & 0xFFFUL)) return -1; // require alignment
+
+    unsigned long pdindex = va >> 22;
+    unsigned long ptindex = (va >> 12) & 0x03FF;
+
+    // Access PD via recursive map
+    volatile unsigned long *pd = (unsigned long *)0xFFFFF000;
+
+    // If PDE is absent, create a new PT from our pool and wire it
+    if (!is_present(pd[pdindex])) {
+        struct page *newpt = alloc_pt_from_pool();
+        if (!newpt) return -2; // out of PTs
+        // Zero already done in allocator; now wire PDE (present|rw, user=0, 4KiB)
+        pd[pdindex] = (((unsigned long)(uintptr_t)newpt) & ~0xFFFUL) | 0x003UL;
+        // After this write, that PT appears at 0xFFC00000 + pdindex*0x1000 immediately
+    }
+
+    volatile unsigned long *pt = (unsigned long *)0xFFC00000 + (0x400 * pdindex);
+
+    // If an existing mapping is present, you can choose to overwrite or error
+    // if (is_present(pt[ptindex])) return -3; // uncomment to disallow remap
+
+    pt[ptindex] = (pa & ~0xFFFUL) | (flags & 0xFFFUL) | 0x001UL; // set Present
+    invlpg((void*)va);
+    return 0;
 }
