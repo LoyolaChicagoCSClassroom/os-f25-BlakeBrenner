@@ -161,12 +161,50 @@ void test_page_allocator(void) {
 
 extern uint32_t _end_kernel; 
 
+/* ====== Tiny paging helpers (kept local to this file to stay contained) ====== */
+static inline uint32_t align_down_page(uint32_t x) { return x & ~0xFFFu; }
+
+/* identity-map [start, end) using the assignment's temp-ppage trick
+   NOTE: works with the simplified paging (single PT for 0..4MiB). */
+static void identity_map_range(uint32_t start, uint32_t end) {
+    const uint32_t LIM = 0x00400000u; // first 4MiB only
+    if (start >= LIM) return;
+    if (end   >  LIM) end = LIM;
+
+    start = align_down_page(start);
+    end   = align_down_page(end + PAGE_SIZE - 1);
+
+    for (uint32_t a = start; a < end; a += PAGE_SIZE) {
+        struct ppage tmp; tmp.next = NULL; tmp.physical_addr = a; // VA==PA
+        (void)map_pages((void*)a, &tmp, kernel_pd);
+    }
+}
+
 // Kernel entry point
 void main() {
     esp_printf(putc, "Hello, World!\n");
     esp_printf(putc, "Execution level: %d\n", 0);
 
+        /* ---- page bring-up ---- */
+    // 1) Identity-map kernel [0x0010_0000, &_end_kernel)
+    identity_map_range(0x00100000u, (uint32_t)&_end_kernel);
 
+    // 2) Identity-map a small window around the current stack (8 pages)
+    uint32_t esp_val; __asm__ __volatile__("mov %%esp,%0" : "=r"(esp_val));
+    uint32_t stack_lo  = align_down_page(esp_val) - 7*PAGE_SIZE;
+    uint32_t stack_hi  = align_down_page(esp_val) + 1*PAGE_SIZE;
+    identity_map_range(stack_lo, stack_hi);
+
+    // 3) Identity-map VGA text buffer @ 0xB8000 (one page is enough)
+    identity_map_range(0x000B8000u, 0x000B8000u + PAGE_SIZE);
+
+    // 4) Load CR3 and enable paging (CR0.PE | CR0.PG)
+    loadPageDirectory(kernel_pd);
+    enablePaging();
+    esp_printf(putc, "Paging enabled. PD=%p  kernel=%p..%p  stack~%p  VGA=0xB8000\n",
+               kernel_pd, (void*)0x00100000u, &_end_kernel, (void*)esp_val);
+    /* ---- end paging bring-up ---- */
+    
     test_page_allocator();
 
     while (1){
