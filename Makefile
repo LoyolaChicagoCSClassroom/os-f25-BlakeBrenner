@@ -66,6 +66,7 @@ run:
 	qemu-system-i386 -hda rootfs.img
 
 debug:
+	./launch_qemu.sh
 	screen -S qemu -d -m qemu-system-i386 -S -s -hda rootfs.img -monitor stdio
 	TERM=xterm i386-unknown-elf-gdb -x gdb_os.txt && killall qemu-system-i386
 
