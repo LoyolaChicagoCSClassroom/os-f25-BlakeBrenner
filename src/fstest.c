@@ -18,6 +18,7 @@ rambler@system ~ $ mkfs.vfat -F 16 disk.img
 #include <unistd.h>
 
 char sector_buf[512];
+char rde_reigonn[16384];
 int fd = 0;
 
 
@@ -33,12 +34,13 @@ int fd = 0;
    access the ATA controller.
 
 */
-int read_sector_from_disk_image(unsigned int sector_num, char *buf) {
+int read_sector_from_disk_image(unsigned int sector_num, char *buf, unsigned int nsectors) {
   // position the OS index 
   lseek(fd, sector_num * 512, SEEK_SET);
 
   // Read one sector from disk image
-  int n = read(fd, buf, 512); }
+  int n = read(fd, buf, 512 * nsectors);
+ }
 
 
 int main() {
@@ -53,7 +55,7 @@ int main() {
   read_sector_from_disk_image(0, sector_buf);
 
   // not weird way to print sectors per cluster
-  printf("sectors per cluster = %d\n", sector_buf[13]);
+  //printf("sectors per cluster = %d\n", sector_buf[13]);
 
   // Print info from superblock
   printf("sectors per cluster = %d\n", bs->num_sectors_per_cluster);
@@ -61,5 +63,9 @@ int main() {
   printf("num fat tables = %d\n", bs->num_fat_tables);
   printf("num RDEs = %d\n", bs->num_root_dir_entries);
 
+  //read RDE reigon replace 0 with 2048 for homework
+  read_sector_from_disk_image( 0 + bs->num_reserved_sectors + bs->num_fat_tables * bs->num_sectors_per_fat, //sector num
+  			       rde_reigon, // buffer to hold the RDE table
+			       32);// Number of sectors in the RDE Table
   return 0;
 }
