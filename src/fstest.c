@@ -18,7 +18,7 @@ rambler@system ~ $ mkfs.vfat -F 16 disk.img
 #include <unistd.h>
 
 char sector_buf[512];
-char rde_reigonn[16384];
+char rde_reigon[16384];
 int fd = 0;
 
 
@@ -42,17 +42,48 @@ int read_sector_from_disk_image(unsigned int sector_num, char *buf, unsigned int
   int n = read(fd, buf, 512 * nsectors);
  }
 
+ //strcpy()
+ void array2array(char *dest[], char *src[]){
+  // copy from arr1 to arr2
+  int k = 0;
+  while(dest[k] != 0){
+    src[k] = dest[k];
+    k++;
+  }
+ }
 
+ //strcpy() for fat
+ void extract_fname(struct root_directory_entry *rde, char *fname){
+  // copy from arr1 to arr2
+  int k = 0;
+  while (rde->file_name[k] != ' ') && (k < 8){
+    fname[k] = (rde->file_name)[k];
+    k++;
+  }
+  fname[k] = '\0';
+  if(rde->file_extension[0] == ' '){
+    return;
+  }
+  fname[k++] = '.'; //add dot
+  fname[k++] = '\0';//add null terminator
+  int n = 0
+  while (rde->file_extension[k] != ' ') && (n < 3){
+    fname[k] = (rde->file_extension)[n];
+    k++;
+    n++;
+  }
+  fname[k] = '\0';
+ }
 int main() {
 
-  struct boot_sector *bs = sector_buf;
-
+  struct boot_sector *bs = (struct boot_sector*)sector_buf;
+  struct root_directory_entry *rde_tbl =(struct root_directory_entry*) rde_reigon;
   // Open disk image file. fd is a global to make it accessible to
   // read_sector_from_disk_image()
   fd = open("disk.img", O_RDONLY);
 
   // Call our function to read a sector from the disk image.
-  read_sector_from_disk_image(0, sector_buf);
+  read_sector_from_disk_image(0, sector_buf, 1);
 
   // not weird way to print sectors per cluster
   //printf("sectors per cluster = %d\n", sector_buf[13]);
@@ -67,5 +98,12 @@ int main() {
   read_sector_from_disk_image( 0 + bs->num_reserved_sectors + bs->num_fat_tables * bs->num_sectors_per_fat, //sector num
   			       rde_reigon, // buffer to hold the RDE table
 			       32);// Number of sectors in the RDE Table
+  for(int k = 0; k < 512; k++){
+    char temp_str[10];
+    strcpy_fat(temp_str, rde_tbl[k].file_name);
+    extract_fname(&rde_tbl[k], temp_str);
+    printf("fname = %s\n", rde_tbl[k].file_name);
+  }
+
   return 0;
 }
